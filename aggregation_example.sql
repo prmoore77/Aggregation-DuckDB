@@ -1,6 +1,4 @@
-DROP TABLE product_nodes;
-
-CREATE TABLE product_nodes
+CREATE OR REPLACE TABLE product_nodes
 (
     node_id                VARCHAR(36) DEFAULT uuid()
   , node_natural_key       INTEGER      NOT NULL
@@ -339,8 +337,20 @@ VALUES ((SELECT node_natural_key
       , 0.50
        );
 
+INSERT INTO sales_facts (product_id, customer_id, date_id, unit_quantity, sales_amount)
+VALUES ((SELECT node_natural_key
+           FROM product_nodes
+          WHERE node_name = 'Spinach')
+      , 'Lottie'
+      , DATE '2022-01-04'
+      , 1
+      , 0.50
+       );
+
 -- Now perform hierarchical aggregations
-SELECT LPAD (' ', (products.ancestor_level_number - 1) * 5, ' ')
+SELECT LPAD (' ', (products.ancestor_level_number - 1) * 7, ' ')
+     || products.ancestor_level_name       AS product_level_name
+     , LPAD (' ', (products.ancestor_level_number - 1) * 7, ' ')
      || products.ancestor_node_name        AS product_node_name
      -- Aggregates
      , SUM (facts.sales_amount)           AS sum_sales_amount
