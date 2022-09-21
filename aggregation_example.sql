@@ -207,6 +207,7 @@ SELECT * EXCLUDE (node_id, parent_node_id, level_1_node_id, level_2_node_id, lev
   FROM product_reporting_dim
 ORDER BY node_sort_order ASC;
 
+-- Create a fact table so we can demonstrate hierarchical aggregation
 CREATE TABLE sales_facts (
   product_id    INTEGER NOT NULL
 , customer_id   VARCHAR (100) NOT NULL
