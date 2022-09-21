@@ -1,6 +1,6 @@
-CREATE OR REPLACE TABLE product_nodes
+CREATE TABLE product_nodes
 (
-    node_id                VARCHAR(36)  DEFAULT uuid() -- Making this a VARCHAR instead of UUID type so that the JDBC driver can work
+    node_id                VARCHAR(36)  DEFAULT uuid()
   , node_natural_key       INTEGER      NOT NULL
   , node_name              VARCHAR(100) NOT NULL
   , level_name             VARCHAR(100) NOT NULL
@@ -13,7 +13,8 @@ CREATE OR REPLACE TABLE product_nodes
 )
 ;
 
--- Top Node
+
+-- Root (Top) Node (has no parent node)
 INSERT INTO product_nodes (node_natural_key, node_name, level_name, parent_node_id)
 VALUES (0, 'All Products', 'Total Products', NULL);
 
@@ -59,29 +60,22 @@ SELECT *
 CREATE OR REPLACE TEMPORARY TABLE product_nodes_temp
 AS
 SELECT node_id
-       , node_natural_key
-       , node_name
-       , level_name
-       , parent_node_id
-       , is_root
-       , is_leaf
-   FROM (SELECT node_id
-              , node_natural_key
-              , node_name
-              , level_name
-              , parent_node_id
-              , CASE WHEN parent_node_id IS NULL
-                        THEN TRUE
-                        ELSE FALSE
-                END AS is_root
-              , CASE WHEN node_id IN (SELECT parent_node_id
-                                        FROM product_nodes
-                                     )
-                        THEN FALSE
-                        ELSE TRUE
-                END AS is_leaf
-           FROM product_nodes
-        );
+     , node_natural_key
+     , node_name
+     , level_name
+     , parent_node_id
+     , CASE WHEN parent_node_id IS NULL
+               THEN TRUE
+               ELSE FALSE
+       END AS is_root
+     , CASE WHEN node_id IN (SELECT parent_node_id
+                               FROM product_nodes
+                            )
+               THEN FALSE
+               ELSE TRUE
+       END AS is_leaf
+  FROM product_nodes
+;
 
 -- Inspect the data
 SELECT *
@@ -195,16 +189,17 @@ SELECT node_id
      , node_json_path[1].node_natural_key   AS level_1_node_natural_key
      , node_json_path[1].node_name          AS level_1_node_name
      , node_json_path[1].level_name         AS level_1_level_name
-     -- Level 1 columns
+     -- Level 2 columns
      , node_json_path[2].node_id            AS level_2_node_id
      , node_json_path[2].node_natural_key   AS level_2_node_natural_key
      , node_json_path[2].node_name          AS level_2_node_name
      , node_json_path[2].level_name         AS level_2_level_name
-     -- Level 1 columns
+     -- Level 3 columns
      , node_json_path[3].node_id            AS level_3_node_id
      , node_json_path[3].node_natural_key   AS level_3_node_natural_key
      , node_json_path[3].node_name          AS level_3_node_name
      , node_json_path[3].level_name         AS level_3_level_name
+     -- If you have more than 3 levels, copy a level section and paste here - using: node_json_path[n].x (where n is the level)
   FROM parent_nodes
 ORDER BY node_sort_order ASC;
 
@@ -212,92 +207,7 @@ SELECT * EXCLUDE (node_id, parent_node_id, level_1_node_id, level_2_node_id, lev
   FROM product_reporting_dim
 ORDER BY node_sort_order ASC;
 
-
--- Recursively Build an Exploded Hierarchy structure from the data for ease of aggregation...
-CREATE OR REPLACE TABLE product_aggregation_dim
-AS
-WITH RECURSIVE parent_nodes (
-    node_id
-  , node_natural_key
-  , node_name
-  , level_name
-  , parent_node_id
-  , is_root
-  , is_leaf
-  , level_number
-  , node_sort_order
-  , node_json
-  , node_json_path
-    )
-AS (
-    -- Anchor Clause
-    SELECT
-        node_id
-      , node_natural_key
-      , node_name
-      , level_name
-      , parent_node_id
-      , is_root
-      , is_leaf
-      , level_number
-      , node_sort_order
-      , node_json
-      -- We must start a new NODE_JSON array b/c each node will be represented as a root node...
-      , [node_json] AS node_json_path
-       FROM product_reporting_dim
-       -- We do NOT filter the anchor, because we want EVERY node in the hierarchy to be a root node...
-    UNION ALL
-    -- Recursive Clause
-    SELECT
-        nodes.node_id
-      , nodes.node_natural_key
-      , nodes.node_name
-      , nodes.level_name
-      , nodes.parent_node_id
-      , nodes.is_root
-      , nodes.is_leaf
-      , nodes.level_number
-      , nodes.node_sort_order
-      , nodes.node_json
-      , array_append (parent_nodes.node_json_path
-                    , nodes.node_json
-                     ) AS node_json_path
-       FROM product_reporting_dim AS nodes
-          JOIN
-            parent_nodes
-          ON nodes.parent_node_id = parent_nodes.node_id
-)
-SELECT -- Ancestor columns (we take the first array element to get the anchor root)
-        node_json_path[1].node_id             AS ancestor_node_id
-      , node_json_path[1].node_natural_key    AS ancestor_node_natural_key
-      , node_json_path[1].node_name           AS ancestor_node_name
-      , node_json_path[1].level_name          AS ancestor_level_name
-      , node_json_path[1].level_number        AS ancestor_level_number
-      , node_json_path[1].is_root             AS ancestor_is_root
-      , node_json_path[1].is_leaf             AS ancestor_is_leaf
-      , node_json_path[1].node_sort_order     AS ancestor_node_sort_order
-      -- Descendant columns
-      , node_id                               AS descendant_node_id
-      , node_natural_key                      AS descendant_node_natural_key
-      , node_name                             AS descendant_node_name
-      , level_name                            AS descendant_level_name
-      , level_number                          AS descendant_level_number
-      , is_root                               AS descendant_is_root
-      , is_leaf                               AS descendant_is_leaf
-      , node_sort_order                       AS descendant_node_sort_order
-      --
-      , (level_number - node_json_path[1].level_number) AS net_level
-  FROM parent_nodes
-ORDER BY node_sort_order ASC;
-
-SELECT *
- FROM product_aggregation_dim
-ORDER BY ancestor_node_sort_order    ASC
-       , descendant_node_sort_order  ASC
-LIMIT 100;
-
--- Now Create a Fact table
-CREATE OR REPLACE TABLE sales_facts (
+CREATE TABLE sales_facts (
   product_id    INTEGER NOT NULL
 , customer_id   VARCHAR (100) NOT NULL
 , date_id       DATE    NOT NULL
@@ -386,10 +296,144 @@ VALUES ((SELECT node_natural_key
       , 2.00
        );
 
+-- Show the sales_facts contents (join to Product for descriptions)
+SELECT product_nodes.node_name AS product_name
+     , sales_facts.*
+  FROM sales_facts
+    JOIN
+       product_nodes
+    ON sales_facts.product_id = product_nodes.node_natural_key;
+
+WITH rollup_aggregations AS (
+SELECT CASE WHEN GROUPING (level_3_node_id) = 0
+               THEN products.level_3_node_id
+            WHEN GROUPING (level_2_node_id) = 0
+               THEN products.level_2_node_id
+            WHEN GROUPING (level_1_node_id) = 0
+               THEN products.level_1_node_id
+       END AS product_node_id
+     -- Aggregates
+     , SUM (facts.sales_amount)           AS sum_sales_amount
+     , SUM (facts.unit_quantity)          AS sum_unit_quantity
+     , COUNT (DISTINCT facts.customer_id) AS distinct_customer_count
+     , COUNT (*)                          AS count_of_fact_records
+  FROM sales_facts AS facts
+    JOIN
+       product_reporting_dim AS products
+    ON facts.product_id = products.node_natural_key
+-- You must add more levels here if you intend to aggregate more than 3 levels...
+GROUP BY ROLLUP (products.level_1_node_id
+               , products.level_2_node_id
+               , products.level_3_node_id
+                )
+-- Throw out the "GRAND TOTAL" grouping set...
+HAVING NOT GROUPING (products.level_1_node_id) = 1
+)
+-- Now join to the product_reporting_dim to get the sort order sequence...
+SELECT LPAD ('-', (product_reporting_dim.level_number - 1) * 7, '-')
+     || product_reporting_dim.level_name       AS product_level_name
+     , LPAD ('-', (product_reporting_dim.level_number - 1) * 7, '-')
+     || product_reporting_dim.node_name        AS product_node_name
+     --
+     , rollup_aggregations.sum_sales_amount
+     , rollup_aggregations.sum_unit_quantity
+     , rollup_aggregations.distinct_customer_count
+     , rollup_aggregations.count_of_fact_records
+  FROM rollup_aggregations
+     JOIN
+       product_reporting_dim
+     ON rollup_aggregations.product_node_id = product_reporting_dim.node_id
+ORDER BY product_reporting_dim.node_sort_order ASC
+;
+
+-- Recursively Build an Exploded Hierarchy structure from the data for ease of aggregation...
+CREATE OR REPLACE TABLE product_aggregation_dim
+AS
+WITH RECURSIVE parent_nodes (
+    node_id
+  , node_natural_key
+  , node_name
+  , level_name
+  , parent_node_id
+  , is_root
+  , is_leaf
+  , level_number
+  , node_sort_order
+  , node_json
+  , node_json_path
+    )
+AS (
+    -- Anchor Clause
+    SELECT
+        node_id
+      , node_natural_key
+      , node_name
+      , level_name
+      , parent_node_id
+      , is_root
+      , is_leaf
+      , level_number
+      , node_sort_order
+      , node_json
+      -- We must start a new NODE_JSON array b/c each node will be represented as a root node...
+      , [node_json] AS node_json_path
+       FROM product_reporting_dim
+       -- We do NOT filter the anchor, because we want EVERY node in the hierarchy to be a root node...
+    UNION ALL
+    -- Recursive Clause
+    SELECT
+        nodes.node_id
+      , nodes.node_natural_key
+      , nodes.node_name
+      , nodes.level_name
+      , nodes.parent_node_id
+      , nodes.is_root
+      , nodes.is_leaf
+      , nodes.level_number
+      , nodes.node_sort_order
+      , nodes.node_json
+      , array_append (parent_nodes.node_json_path
+                    , nodes.node_json
+                     ) AS node_json_path
+       FROM product_reporting_dim AS nodes
+          JOIN
+            parent_nodes
+          ON nodes.parent_node_id = parent_nodes.node_id
+)
+SELECT -- Ancestor columns (we take the first array element to get the anchor root)
+        node_json_path[1].node_id             AS ancestor_node_id
+      , node_json_path[1].node_natural_key    AS ancestor_node_natural_key
+      , node_json_path[1].node_name           AS ancestor_node_name
+      , node_json_path[1].level_name          AS ancestor_level_name
+      , node_json_path[1].level_number        AS ancestor_level_number
+      , node_json_path[1].is_root             AS ancestor_is_root
+      , node_json_path[1].is_leaf             AS ancestor_is_leaf
+      , node_json_path[1].node_sort_order     AS ancestor_node_sort_order
+      -- Descendant columns
+      , node_id                               AS descendant_node_id
+      , node_natural_key                      AS descendant_node_natural_key
+      , node_name                             AS descendant_node_name
+      , level_name                            AS descendant_level_name
+      , level_number                          AS descendant_level_number
+      , is_root                               AS descendant_is_root
+      , is_leaf                               AS descendant_is_leaf
+      , node_sort_order                       AS descendant_node_sort_order
+      --
+      , (level_number - node_json_path[1].level_number) AS net_level
+  FROM parent_nodes
+ORDER BY node_sort_order ASC;
+
+SELECT *
+ FROM product_aggregation_dim
+ORDER BY ancestor_node_sort_order    ASC
+       , descendant_node_sort_order  ASC
+LIMIT 100;
+
 -- Now perform easy hierarchical aggregations with the exploded hierarchy table
-SELECT LPAD (' ', (products.ancestor_level_number - 1) * 7, ' ')
+SELECT -- Use LPAD here to indent the node information based upon its depth in the hierarchy
+       LPAD ('-', (products.ancestor_level_number - 1) * 7, '-')
      || products.ancestor_level_name       AS product_level_name
-     , LPAD (' ', (products.ancestor_level_number - 1) * 7, ' ')
+     , LPAD ('-', (products.ancestor_level_number - 1) * 7, '-')
      || products.ancestor_node_name        AS product_node_name
      -- Aggregates
      , SUM (facts.sales_amount)           AS sum_sales_amount
